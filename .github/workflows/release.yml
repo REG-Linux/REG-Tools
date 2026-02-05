@@ -1,0 +1,103 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build reglinux-fetch
+        run: cargo build --release -p reglinux-fetch
+
+      - name: Build reglinux-burner
+        run: cargo build --release -p reglinux-burner
+
+      - name: Package (linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/release/reglinux-fetch dist/
+          cp target/release/reglinux-burner dist/
+          (cd dist && zip -9 ../reglinux-fetch-linux-${{ github.ref_name }}.zip reglinux-fetch)
+          (cd dist && zip -9 ../reglinux-burner-linux-${{ github.ref_name }}.zip reglinux-burner)
+
+      - name: Package (macos)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          cp target/release/reglinux-fetch dist/
+          cp target/release/reglinux-burner dist/
+          (cd dist && zip -9 ../reglinux-fetch-macos-${{ github.ref_name }}.zip reglinux-fetch)
+          (cd dist && zip -9 ../reglinux-burner-macos-${{ github.ref_name }}.zip reglinux-burner)
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist
+          copy target\release\reglinux-fetch.exe dist\reglinux-fetch.exe
+          copy target\release\reglinux-burner.exe dist\reglinux-burner.exe
+          powershell -Command "Compress-Archive -Path dist\\reglinux-fetch.exe -DestinationPath reglinux-fetch-windows-${{ github.ref_name }}.zip"
+          powershell -Command "Compress-Archive -Path dist\\reglinux-burner.exe -DestinationPath reglinux-burner-windows-${{ github.ref_name }}.zip"
+
+      - name: Upload reglinux-fetch asset (linux)
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-fetch-linux-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload reglinux-burner asset (linux)
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-burner-linux-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload reglinux-fetch asset (macos)
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-fetch-macos-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload reglinux-burner asset (macos)
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-burner-macos-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload reglinux-fetch asset (windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-fetch-windows-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload reglinux-burner asset (windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reglinux-burner-windows-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

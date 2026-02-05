@@ -1,14 +1,21 @@
 #include "usbimager_core.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
+#endif
 
 #include "disks.h"
 #include "lang.h"
@@ -18,9 +25,15 @@
 #include <sys/stat.h>
 #endif
 
-char **lang = NULL;
-char *main_errorMessage = NULL;
 extern char *dict[NUMLANGS][NUMTEXTS + 1];
+
+#ifdef _WIN32
+wchar_t **lang = NULL;
+#else
+char **lang = NULL;
+#endif
+
+char *main_errorMessage = NULL;
 
 static char rl_last_error_buf[256];
 
@@ -38,7 +51,18 @@ const char *rl_last_error(void)
 
 void main_getErrorMessage(void)
 {
+#ifdef _WIN32
+    DWORD err = GetLastError();
+    if(!err) {
+        rl_set_last_error("Unknown error");
+        return;
+    }
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        rl_last_error_buf, (DWORD)sizeof(rl_last_error_buf), NULL);
+#else
     rl_set_last_error(strerror(errno));
+#endif
 }
 
 void main_onProgress(void *data)
@@ -51,7 +75,68 @@ static size_t g_device_cap = 0;
 static size_t g_device_count = 0;
 static int g_show_all = 0;
 
+#ifdef __linux__
 extern char disks_devs[DISKS_MAX][32];
+#endif
+#ifdef __APPLE__
+extern char disks_serials[DISKS_MAX][64];
+#endif
+
+#ifdef _WIN32
+static char *rl_wide_to_utf8(const wchar_t *wstr)
+{
+    int len;
+    char *buf;
+
+    if(!wstr) return strdup("");
+    len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+    if(len <= 0) return strdup("");
+    buf = (char*)malloc((size_t)len);
+    if(!buf) return strdup("");
+    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, buf, len, NULL, NULL);
+    return buf;
+}
+
+static void rl_init_lang(void)
+{
+    int j;
+    if(lang) return;
+    lang = (wchar_t**)calloc(NUMTEXTS, sizeof(wchar_t*));
+    if(!lang) return;
+    for(j = 0; j < NUMTEXTS; j++) {
+        const char *src = dict[0][j + 1];
+        int len = MultiByteToWideChar(CP_UTF8, 0, src, -1, NULL, 0);
+        if(len <= 0) continue;
+        lang[j] = (wchar_t*)calloc((size_t)len, sizeof(wchar_t));
+        if(!lang[j]) continue;
+        MultiByteToWideChar(CP_UTF8, 0, src, -1, lang[j], len);
+    }
+}
+
+static const char *rl_lang_utf8(int idx)
+{
+    static char buf[256];
+    int len;
+    if(idx < 0 || idx >= NUMTEXTS) return "Error";
+    rl_init_lang();
+    if(!lang || !lang[idx]) return "Error";
+    len = WideCharToMultiByte(CP_UTF8, 0, lang[idx], -1, buf, (int)sizeof(buf), NULL, NULL);
+    if(len <= 0) return "Error";
+    return buf;
+}
+#else
+static void rl_init_lang(void)
+{
+    if(!lang) lang = &dict[0][1];
+}
+
+static const char *rl_lang_utf8(int idx)
+{
+    rl_init_lang();
+    if(!lang || idx < 0 || idx >= NUMTEXTS) return "Error";
+    return lang[idx];
+}
+#endif
 
 static int rl_is_removable(const char *name)
 {
@@ -79,19 +164,58 @@ void main_addToCombobox(char *option)
     const char *space;
     size_t len;
     rl_device *dev;
+    int index;
+    const char *removable_name = NULL;
 
     if(!g_devices || g_device_count >= g_device_cap || !option) return;
 
+    index = (int)g_device_count;
+
+#ifdef _WIN32
+    {
+        wchar_t *wopt = (wchar_t*)option;
+        char *utf8 = rl_wide_to_utf8(wopt);
+        dev = &g_devices[g_device_count];
+        memset(dev, 0, sizeof(*dev));
+        dev->label = utf8;
+
+        if(index >= 0 && index < DISKS_MAX) {
+            int target = disks_targets[index];
+            if(target >= 1024) {
+                snprintf(idbuf, sizeof(idbuf), "\\\\.\\COM%d", target - 1024);
+            } else {
+                snprintf(idbuf, sizeof(idbuf), "\\\\.\\PhysicalDrive%d", target);
+            }
+            dev->id = strdup(idbuf);
+        } else {
+            dev->id = strdup("");
+        }
+    }
+#else
     space = strchr(option, ' ');
     len = space ? (size_t)(space - option) : strlen(option);
     if(len >= sizeof(name)) len = sizeof(name) - 1;
     memcpy(name, option, len);
     name[len] = 0;
+    removable_name = name;
 
     dev = &g_devices[g_device_count];
     memset(dev, 0, sizeof(*dev));
     dev->label = strdup(option);
 
+#if defined(__APPLE__)
+    if(index >= 0 && index < DISKS_MAX) {
+        int target = disks_targets[index];
+        if(target >= 1024) {
+            snprintf(idbuf, sizeof(idbuf), "/dev/%s", disks_serials[target - 1024]);
+        } else {
+            snprintf(idbuf, sizeof(idbuf), "/dev/disk%d", target);
+        }
+        dev->id = strdup(idbuf);
+    } else {
+        dev->id = strdup("");
+    }
+#else
     if(name[0] == '/') {
         dev->id = strdup(name);
     } else if(!strncmp(name, "sdT", 3)) {
@@ -101,9 +225,19 @@ void main_addToCombobox(char *option)
         snprintf(idbuf, sizeof(idbuf), "/dev/%s", name);
         dev->id = strdup(idbuf);
     }
+#endif
+#endif
 
     dev->size_bytes = disks_capacity[g_device_count];
-    dev->is_removable = rl_is_removable(name);
+    if(g_show_all) {
+#ifdef __linux__
+        dev->is_removable = removable_name ? rl_is_removable(removable_name) : 0;
+#else
+        dev->is_removable = 0;
+#endif
+    } else {
+        dev->is_removable = 1;
+    }
 
     g_device_count++;
 }
@@ -112,7 +246,7 @@ int rl_list_devices(int show_all, rl_device **out_devices, size_t *out_len)
 {
     if(!out_devices || !out_len) return -1;
 
-    if(!lang) lang = &dict[0][1];
+    rl_init_lang();
 
     g_show_all = show_all ? 1 : 0;
     disks_all = g_show_all;
@@ -150,7 +284,11 @@ void rl_free_devices(rl_device *devices, size_t len)
 }
 
 struct rl_job {
+#ifdef _WIN32
+    HANDLE thread;
+#else
     pthread_t thread;
+#endif
     int cancel;
     int done;
     int result;
@@ -165,11 +303,21 @@ struct rl_job {
 
 static void rl_emit_progress(struct rl_job *job, stream_t *ctx, int done)
 {
-    char status[128];
     if(!job || !job->progress_cb) return;
+#ifdef _WIN32
+    wchar_t status_w[128];
+    char status[256];
+    memset(status_w, 0, sizeof(status_w));
+    memset(status, 0, sizeof(status));
+    stream_status(ctx, (char*)status_w, done);
+    WideCharToMultiByte(CP_UTF8, 0, status_w, -1, status, (int)sizeof(status), NULL, NULL);
+    job->progress_cb(job->user, ctx->readSize, ctx->fileSize, status);
+#else
+    char status[128];
     memset(status, 0, sizeof(status));
     stream_status(ctx, status, done);
     job->progress_cb(job->user, ctx->readSize, ctx->fileSize, status);
+#endif
 }
 
 static void rl_set_job_error(struct rl_job *job, const char *msg)
@@ -183,56 +331,107 @@ static void rl_set_job_error(struct rl_job *job, const char *msg)
 static int rl_find_target_index(const char *device_id)
 {
     int i;
-    const char *name = device_id;
 
     if(!device_id || !*device_id) return -1;
-    if(!lang) lang = &dict[0][1];
-
-    if(!strncmp(device_id, "/dev/", 5)) name = device_id + 5;
+    rl_init_lang();
 
     disks_all = 1;
     disks_serial = 0;
     disks_refreshlist();
 
-    for(i = 0; i < DISKS_MAX; i++) {
-        if(disks_targets[i] == -1) continue;
-        if(!strncmp(disks_devs[i], name, sizeof(disks_devs[i]))) return i;
+#ifdef _WIN32
+    if(!strncmp(device_id, "\\\\.\\PhysicalDrive", 17)) {
+        int num = atoi(device_id + 17);
+        for(i = 0; i < DISKS_MAX; i++) {
+            if(disks_targets[i] == num) return i;
+        }
     }
+    if(!strncmp(device_id, "\\\\.\\COM", 8)) {
+        int num = atoi(device_id + 8);
+        for(i = 0; i < DISKS_MAX; i++) {
+            if(disks_targets[i] == 1024 + num) return i;
+        }
+    }
+    if(!strncmp(device_id, "COM", 3)) {
+        int num = atoi(device_id + 3);
+        for(i = 0; i < DISKS_MAX; i++) {
+            if(disks_targets[i] == 1024 + num) return i;
+        }
+    }
+#elif defined(__APPLE__)
+    {
+        const char *name = device_id;
+        if(!strncmp(device_id, "/dev/", 5)) name = device_id + 5;
+        if(!strncmp(name, "disk", 4) || !strncmp(name, "rdisk", 5)) {
+            const char *p = name + (name[0] == 'r' ? 5 : 4);
+            int num = atoi(p);
+            for(i = 0; i < DISKS_MAX; i++) {
+                if(disks_targets[i] == num) return i;
+            }
+        }
+        for(i = 0; i < DISKS_MAX; i++) {
+            if(disks_targets[i] >= 1024 && disks_serials[disks_targets[i] - 1024][0]) {
+                if(!strcmp(name, disks_serials[disks_targets[i] - 1024])) return i;
+            }
+        }
+    }
+#else
+    {
+        const char *name = device_id;
+        if(!strncmp(device_id, "/dev/", 5)) name = device_id + 5;
+        for(i = 0; i < DISKS_MAX; i++) {
+            if(disks_targets[i] == -1) continue;
+            if(!strncmp(disks_devs[i], name, sizeof(disks_devs[i]))) return i;
+        }
+    }
+#endif
+
     return -1;
 }
 
 static const char *rl_stream_error(int code)
 {
     switch(code) {
-        case 2: return lang[L_ENCZIPERR];
-        case 3: return lang[L_CMPZIPERR];
-        case 4: return lang[L_CMPERR];
-        default: return lang[L_SRCERR];
+        case 2: return rl_lang_utf8(L_ENCZIPERR);
+        case 3: return rl_lang_utf8(L_CMPZIPERR);
+        case 4: return rl_lang_utf8(L_CMPERR);
+        default: return rl_lang_utf8(L_SRCERR);
     }
 }
 
 static const char *rl_open_error(long code)
 {
-    if(code == -1) return lang[L_TRGERR];
-    if(code == -2) return lang[L_UMOUNTERR];
-    if(code == -4) return lang[L_COMMERR];
-    return lang[L_OPENTRGERR];
+    if(code == -1) return rl_lang_utf8(L_TRGERR);
+    if(code == -2) return rl_lang_utf8(L_UMOUNTERR);
+    if(code == -4) return rl_lang_utf8(L_COMMERR);
+    return rl_lang_utf8(L_OPENTRGERR);
 }
 
+#ifdef _WIN32
+static DWORD WINAPI rl_writer_thread(LPVOID arg)
+#else
 static void *rl_writer_thread(void *arg)
+#endif
 {
     struct rl_job *job = (struct rl_job *)arg;
     stream_t ctx;
-    int dst;
     int numberOfBytesRead;
-    int numberOfBytesWritten;
-    int numberOfBytesVerify;
     int needWrite;
     int targetId;
 
-    memset(&ctx, 0, sizeof(ctx));
+#ifdef _WIN32
+    HANDLE dst;
+    LARGE_INTEGER totalWritten;
+    DWORD numberOfBytesWritten;
+    DWORD numberOfBytesVerify;
+#else
+    int dst;
+    int numberOfBytesWritten;
+    int numberOfBytesVerify;
+#endif
 
-    if(!lang) lang = &dict[0][1];
+    memset(&ctx, 0, sizeof(ctx));
+    rl_init_lang();
 
     int open_res = stream_open(&ctx, job->image_path, 0);
     if(open_res) {
@@ -251,6 +450,17 @@ static void *rl_writer_thread(void *arg)
         return NULL;
     }
 
+#ifdef _WIN32
+    dst = (HANDLE)disks_open(targetId, ctx.fileSize);
+    if(dst == NULL || dst == (HANDLE)-1 || dst == (HANDLE)-2 || dst == (HANDLE)-3 || dst == (HANDLE)-4) {
+        rl_set_job_error(job, rl_open_error((long)dst));
+        stream_close(&ctx);
+        job->result = 1;
+        job->done = 1;
+        return NULL;
+    }
+    totalWritten.QuadPart = 0;
+#else
     dst = (int)((long int)disks_open(targetId, ctx.fileSize));
     if(dst <= 0) {
         rl_set_job_error(job, rl_open_error((long)dst));
@@ -259,13 +469,14 @@ static void *rl_writer_thread(void *arg)
         job->done = 1;
         return NULL;
     }
+#endif
 
     rl_emit_progress(job, &ctx, 0);
 
     while(!job->cancel) {
         numberOfBytesRead = stream_read(&ctx);
         if(numberOfBytesRead < 0) {
-            rl_set_job_error(job, lang[L_RDSRCERR]);
+            rl_set_job_error(job, rl_lang_utf8(L_RDSRCERR));
             job->result = 1;
             break;
         }
@@ -275,6 +486,41 @@ static void *rl_writer_thread(void *arg)
         }
         errno = 0;
         needWrite = 1;
+
+#ifdef _WIN32
+        if(!force) {
+            if(ReadFile(dst, ctx.verifyBuf, (DWORD)numberOfBytesRead, &numberOfBytesVerify, NULL) &&
+                numberOfBytesRead == (int)numberOfBytesVerify &&
+                !memcmp(ctx.buffer, ctx.verifyBuf, numberOfBytesRead)) {
+                needWrite = 0;
+                totalWritten.QuadPart += numberOfBytesVerify;
+                rl_emit_progress(job, &ctx, 0);
+            } else {
+                SetFilePointerEx(dst, totalWritten, NULL, FILE_BEGIN);
+            }
+        }
+        if(needWrite) {
+            if(WriteFile(dst, ctx.buffer, (DWORD)numberOfBytesRead, &numberOfBytesWritten, NULL)) {
+                if(job->verify) {
+                    SetFilePointerEx(dst, totalWritten, NULL, FILE_BEGIN);
+                    if(!ReadFile(dst, ctx.verifyBuf, numberOfBytesWritten, &numberOfBytesVerify, NULL) ||
+                        numberOfBytesWritten != numberOfBytesVerify ||
+                        memcmp(ctx.buffer, ctx.verifyBuf, numberOfBytesWritten)) {
+                        rl_set_job_error(job, rl_lang_utf8(L_VRFYERR));
+                        job->result = 1;
+                        break;
+                    }
+                }
+                totalWritten.QuadPart += numberOfBytesWritten;
+                rl_emit_progress(job, &ctx, 0);
+            } else {
+                main_getErrorMessage();
+                rl_set_job_error(job, rl_lang_utf8(L_WRTRGERR));
+                job->result = 1;
+                break;
+            }
+        }
+#else
         if(!force) {
             numberOfBytesVerify = (int)read(dst, ctx.verifyBuf, numberOfBytesRead);
             if(numberOfBytesVerify == numberOfBytesRead &&
@@ -293,7 +539,7 @@ static void *rl_writer_thread(void *arg)
                     numberOfBytesVerify = (int)read(dst, ctx.verifyBuf, numberOfBytesWritten);
                     if(numberOfBytesVerify != numberOfBytesWritten ||
                         memcmp(ctx.buffer, ctx.verifyBuf, numberOfBytesWritten)) {
-                        rl_set_job_error(job, lang[L_VRFYERR]);
+                        rl_set_job_error(job, rl_lang_utf8(L_VRFYERR));
                         job->result = 1;
                         break;
                     }
@@ -301,11 +547,12 @@ static void *rl_writer_thread(void *arg)
                 rl_emit_progress(job, &ctx, 0);
             } else {
                 if(errno) main_getErrorMessage();
-                rl_set_job_error(job, lang[L_WRTRGERR]);
+                rl_set_job_error(job, rl_lang_utf8(L_WRTRGERR));
                 job->result = 1;
                 break;
             }
         }
+#endif
     }
 
     if(job->cancel && job->result == 0) {
@@ -313,7 +560,6 @@ static void *rl_writer_thread(void *arg)
         job->result = 2;
     }
 
-    stream_status(&ctx, job->error, 1);
     rl_emit_progress(job, &ctx, 1);
 
     disks_close((void *)((long int)dst));
@@ -333,7 +579,7 @@ rl_job *rl_write_image_zst(const char *image_path, const char *device_id, int ve
         return NULL;
     }
 
-    if(!lang) lang = &dict[0][1];
+    rl_init_lang();
 
     job = (struct rl_job*)calloc(1, sizeof(struct rl_job));
     if(!job) {
@@ -349,11 +595,20 @@ rl_job *rl_write_image_zst(const char *image_path, const char *device_id, int ve
     job->user = user;
     job->result = 0;
 
+#ifdef _WIN32
+    job->thread = CreateThread(NULL, 0, rl_writer_thread, job, 0, NULL);
+    if(!job->thread) {
+        rl_set_last_error("Failed to start writer thread");
+        free(job);
+        return NULL;
+    }
+#else
     if(pthread_create(&job->thread, NULL, rl_writer_thread, job) != 0) {
         rl_set_last_error("Failed to start writer thread");
         free(job);
         return NULL;
     }
+#endif
 
     return (rl_job*)job;
 }
@@ -368,8 +623,15 @@ int rl_cancel(rl_job *job)
 int rl_wait(rl_job *job)
 {
     if(!job) return -1;
+#ifdef _WIN32
+    WaitForSingleObject(job->thread, INFINITE);
+    CloseHandle(job->thread);
+    job->thread = NULL;
+    return job->result;
+#else
     pthread_join(job->thread, NULL);
     return job->result;
+#endif
 }
 
 void rl_free(rl_job *job)
@@ -377,7 +639,13 @@ void rl_free(rl_job *job)
     if(!job) return;
     if(!job->done) {
         job->cancel = 1;
+#ifdef _WIN32
+        WaitForSingleObject(job->thread, INFINITE);
+        CloseHandle(job->thread);
+        job->thread = NULL;
+#else
         pthread_join(job->thread, NULL);
+#endif
     }
     free(job);
 }

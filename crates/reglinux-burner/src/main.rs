@@ -42,6 +42,7 @@ fn set_model(list: Vec<String>) -> ModelRc<SharedString> {
     ModelRc::from(std::rc::Rc::new(model))
 }
 
+#[cfg(target_os = "linux")]
 fn is_system_disk(device_path: &str) -> bool {
     let Ok(data) = fs::read_to_string("/proc/self/mountinfo") else { return false; };
     for line in data.lines() {
@@ -74,7 +75,76 @@ fn is_system_disk(device_path: &str) -> bool {
     false
 }
 
+fn is_elevated() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::BOOL;
+        use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use windows_sys::Win32::Security::TOKEN_QUERY;
+
+        unsafe {
+            let mut token: isize = 0;
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+            let mut size = 0u32;
+            let ok: BOOL = GetTokenInformation(
+                token,
+                TokenElevation,
+                &mut elevation as *mut _ as *mut _,
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut size,
+            );
+            if ok == 0 {
+                return false;
+            }
+            elevation.TokenIsElevated != 0
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_system_disk(_device_path: &str) -> bool {
+    false
+}
+
+fn privilege_message() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Administrator privileges required. Relaunch as admin."
+    } else if cfg!(target_os = "macos") {
+        "Root privileges required to write raw disks."
+    } else {
+        "Root privileges required to write raw disks."
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--list-devices") {
+        match usbimager_sys::list_devices(true) {
+            Ok(devices) => {
+                for dev in devices {
+                    println!("{} | {} | {} bytes | removable={}", dev.id, dev.label, dev.size_bytes, dev.is_removable);
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("ERROR: {}", err);
+                std::process::exit(1);
+            }
+        }
+    }
+
     let ui = AppWindow::new()?;
     ui.set_repo("REG-Linux/REG-Linux".into());
     ui.set_tag("".into());
@@ -380,6 +450,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let needs_confirm = !device.is_removable || is_system_disk(&device.id);
+        if !is_elevated() {
+            let ui = ui_flash.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui.upgrade() {
+                    ui.set_flash_status(privilege_message().into());
+                    ui.set_busy_flash(false);
+                }
+            });
+            return;
+        }
         if needs_confirm && confirm.trim() != "ERASE" {
             let msg = if !device.is_removable {
                 "Selected disk is not removable. Confirm to proceed."

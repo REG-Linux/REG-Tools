@@ -39,7 +39,7 @@ struct RlJob {
 type ProgressCb = Option<unsafe extern "C" fn(*mut c_void, u64, u64, *const c_char)>;
 type ErrorCb = Option<unsafe extern "C" fn(*mut c_void, *const c_char)>;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 extern "C" {
     fn rl_list_devices(show_all: c_int, out_devices: *mut *mut RlDevice, out_len: *mut usize) -> c_int;
     fn rl_free_devices(devices: *mut RlDevice, len: usize);
@@ -58,7 +58,7 @@ extern "C" {
     fn rl_last_error() -> *const c_char;
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 unsafe fn rl_last_error() -> *const c_char {
     ptr::null()
 }
@@ -135,7 +135,7 @@ unsafe extern "C" fn error_trampoline(user: *mut c_void, message: *const c_char)
 }
 
 pub fn list_devices(show_all: bool) -> Result<Vec<Device>, UsbImagerError> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     unsafe {
         let mut ptr: *mut RlDevice = ptr::null_mut();
         let mut len: usize = 0;
@@ -170,10 +170,10 @@ pub fn list_devices(show_all: bool) -> Result<Vec<Device>, UsbImagerError> {
         Ok(out)
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = show_all;
-        Err(UsbImagerError::new("USBImager engine is only available on Linux"))
+        Err(UsbImagerError::new("USBImager engine is not available on this platform"))
     }
 }
 
@@ -187,7 +187,7 @@ unsafe impl Sync for WriteJob {}
 
 impl WriteJob {
     pub fn cancel(&self) -> Result<(), UsbImagerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         unsafe {
             if self.handle.is_null() {
                 return Err(UsbImagerError::new("Invalid job handle"));
@@ -197,14 +197,14 @@ impl WriteJob {
             }
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
-            Err(UsbImagerError::new("USBImager engine is only available on Linux"))
+            Err(UsbImagerError::new("USBImager engine is not available on this platform"))
         }
     }
 
     pub fn wait(mut self) -> Result<(), UsbImagerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         unsafe {
             if self.handle.is_null() {
                 return Err(UsbImagerError::new("Invalid job handle"));
@@ -222,10 +222,10 @@ impl WriteJob {
                 Err(last_error_string())
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
             let _ = &mut self;
-            Err(UsbImagerError::new("USBImager engine is only available on Linux"))
+            Err(UsbImagerError::new("USBImager engine is not available on this platform"))
         }
     }
 }
@@ -253,7 +253,7 @@ pub fn write_image_zst(
     progress_cb: Option<Box<dyn FnMut(Progress) + Send>>,
     error_cb: Option<Box<dyn FnMut(String) + Send>>,
 ) -> Result<WriteJob, UsbImagerError> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     unsafe {
         let image_c = CString::new(image_path).map_err(|_| UsbImagerError::new("Invalid image path"))?;
         let device_c = CString::new(device_id).map_err(|_| UsbImagerError::new("Invalid device id"))?;
@@ -284,13 +284,13 @@ pub fn write_image_zst(
         Ok(WriteJob { handle, cb_state })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = image_path;
         let _ = device_id;
         let _ = verify;
         let _ = progress_cb;
         let _ = error_cb;
-        Err(UsbImagerError::new("USBImager engine is only available on Linux"))
+        Err(UsbImagerError::new("USBImager engine is not available on this platform"))
     }
 }

@@ -15,19 +15,24 @@ fn collect_c_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn rerun(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+}
+
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os != "linux" {
-        println!("cargo:warning=usbimager-sys only builds the C engine on Linux");
-        return;
-    }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let vendor = manifest_dir.join("../../vendor/usbimager/src");
 
     let mut build = cc::Build::new();
+    build.warnings(false);
+
+    if target_os != "windows" {
+        build.flag("-std=c99");
+    }
+
     build
-        .flag("-std=c99")
         .define("DISKS_TEST", "0")
         .define("_FILE_OFFSET_BITS", "64")
         .define("__USE_FILE_OFFSET64", "1")
@@ -41,7 +46,6 @@ fn main() {
         .define("DEBUGLEVEL", "0")
         .define("XZ_USE_CRC64", None)
         .define("XZ_DEC_ANY_CHECK", None)
-        .warnings(false)
         .include(&vendor)
         .include(vendor.join("zlib"))
         .include(vendor.join("bzip2"))
@@ -49,11 +53,30 @@ fn main() {
         .include(vendor.join("zstd"))
         .include(manifest_dir.join("c"));
 
+    if target_os == "windows" {
+        build.define("WINVER", "0x0500");
+        build.define("UNICODE", "1");
+    }
+
+    if target_os == "macos" {
+        build.define("MACOSX", "1");
+        build.flag("-x").flag("objective-c");
+    }
+
     build.file(manifest_dir.join("c/usbimager_core.c"));
     build.file(manifest_dir.join("c/xz_crc64.c"));
     build.file(vendor.join("stream.c"));
     build.file(vendor.join("lang.c"));
-    build.file(vendor.join("disks_linux.c"));
+
+    match target_os.as_str() {
+        "linux" => build.file(vendor.join("disks_linux.c")),
+        "windows" => build.file(vendor.join("disks_win.c")),
+        "macos" => build.file(vendor.join("disks_darwin.c")),
+        other => {
+            println!("cargo:warning=usbimager-sys unsupported target: {}", other);
+            return;
+        }
+    };
 
     let mut files = Vec::new();
     collect_c_files(&vendor.join("zlib"), &mut files);
@@ -69,5 +92,25 @@ fn main() {
 
     build.compile("usbimager_core");
 
-    println!("cargo:rustc-link-lib=pthread");
+    rerun(&manifest_dir.join("c/usbimager_core.c"));
+    rerun(&manifest_dir.join("c/xz_crc64.c"));
+    rerun(&vendor.join("stream.c"));
+    rerun(&vendor.join("lang.c"));
+    rerun(&vendor.join("disks_linux.c"));
+    rerun(&vendor.join("disks_win.c"));
+    rerun(&vendor.join("disks_darwin.c"));
+
+    if target_os == "linux" {
+        println!("cargo:rustc-link-lib=pthread");
+    }
+    if target_os == "windows" {
+        println!("cargo:rustc-link-lib=setupapi");
+        println!("cargo:rustc-link-lib=cfgmgr32");
+        println!("cargo:rustc-link-lib=advapi32");
+    }
+    if target_os == "macos" {
+        println!("cargo:rustc-link-lib=framework=IOKit");
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=DiskArbitration");
+    }
 }

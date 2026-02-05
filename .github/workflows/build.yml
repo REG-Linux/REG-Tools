@@ -1,0 +1,69 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build reglinux-fetch
+        run: cargo build --release -p reglinux-fetch
+
+      - name: Build reglinux-burner
+        run: cargo build --release -p reglinux-burner
+
+      - name: Smoke test reglinux-fetch --help
+        run: cargo run --release -p reglinux-fetch -- --help
+
+      - name: Smoke test reglinux-burner --list-devices
+        run: cargo run --release -p reglinux-burner -- --list-devices
+
+      - name: Package reglinux-fetch (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist-fetch
+          cp target/release/reglinux-fetch dist-fetch/
+
+      - name: Package reglinux-burner (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist-burner
+          cp target/release/reglinux-burner dist-burner/
+
+      - name: Package reglinux-fetch (windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist-fetch
+          copy target\release\reglinux-fetch.exe dist-fetch\reglinux-fetch.exe
+
+      - name: Package reglinux-burner (windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist-burner
+          copy target\release\reglinux-burner.exe dist-burner\reglinux-burner.exe
+
+      - name: Upload reglinux-fetch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reglinux-fetch-${{ runner.os }}
+          path: dist-fetch
+
+      - name: Upload reglinux-burner artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reglinux-burner-${{ runner.os }}
+          path: dist-burner
