@@ -30,7 +30,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
