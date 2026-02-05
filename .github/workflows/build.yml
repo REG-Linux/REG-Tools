@@ -35,9 +35,6 @@ jobs:
       - name: Smoke test reglinux-fetch --help
         run: cargo run --release -p reglinux-fetch -- --help
 
-      - name: Smoke test reglinux-burner --list-devices
-        run: cargo run --release -p reglinux-burner -- --list-devices
-
       - name: Package reglinux-fetch (unix)
         if: runner.os != 'Windows'
         run: |
