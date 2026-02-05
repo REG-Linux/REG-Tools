@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ${{ matrix.os }}
@@ -59,6 +62,14 @@ jobs:
           copy target\release\reglinux-burner.exe dist\reglinux-burner.exe
           powershell -Command "Compress-Archive -Path dist\\reglinux-fetch.exe -DestinationPath reglinux-fetch-windows-${{ github.ref_name }}.zip"
           powershell -Command "Compress-Archive -Path dist\\reglinux-burner.exe -DestinationPath reglinux-burner-windows-${{ github.ref_name }}.zip"
+
+      - name: List artifacts (unix)
+        if: runner.os != 'Windows'
+        run: ls -la *.zip
+
+      - name: List artifacts (windows)
+        if: runner.os == 'Windows'
+        run: dir *.zip
 
       - name: Upload reglinux-fetch asset (linux)
         if: runner.os == 'Linux'
