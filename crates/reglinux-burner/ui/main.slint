@@ -1,0 +1,183 @@
+import { LineEdit, Button, CheckBox, ComboBox, ProgressIndicator, ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    width: 860px;
+    height: 640px;
+    title: "REG Linux Burner";
+
+    in-out property <string> repo;
+    in-out property <string> tag;
+    in-out property <string> output_dir;
+    in-out property <[string]> target_list;
+    in-out property <int> target_index;
+    in-out property <[string]> device_list;
+    in-out property <int> device_index;
+    in-out property <bool> show_all_disks;
+    in-out property <bool> verify;
+    in-out property <string> confirm_text;
+    in-out property <string> safety_message;
+    in-out property <bool> safety_required;
+    in-out property <float> download_progress;
+    in-out property <string> download_status;
+    in-out property <float> flash_progress;
+    in-out property <string> flash_status;
+    in-out property <bool> busy_download;
+    in-out property <bool> busy_flash;
+    in-out property <bool> about_open;
+    in-out property <string> about_text;
+
+    callback fetch_manifest();
+    callback refresh_devices();
+    callback download();
+    callback flash();
+    callback cancel();
+
+    VerticalLayout {
+        spacing: 12px;
+        padding: 16px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "REG Linux Fetch + Burner";
+                font-size: 20px;
+                font-weight: 700;
+            }
+            Rectangle { width: 1px; }
+            Button { text: "About"; clicked => { root.about_open = true; } }
+        }
+
+        Rectangle {
+            background: #f5f5f5;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                Text { text: "Release"; font-weight: 600; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Repo"; }
+                    LineEdit { text <=> root.repo; }
+                    Text { text: "Tag"; }
+                    LineEdit { text <=> root.tag; }
+                    Button { text: "Fetch manifest"; clicked => { root.fetch_manifest(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Target"; }
+                    ComboBox { model: root.target_list; current-index <=> root.target_index; }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #f5f5f5;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text { text: "Download"; font-weight: 600; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Output folder"; }
+                    LineEdit { text <=> root.output_dir; }
+                    Button { text: "Download"; enabled: !root.busy_download; clicked => { root.download(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    ProgressIndicator { progress: root.download_progress; }
+                    Text { text: root.download_status; }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #f5f5f5;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text { text: "Device"; font-weight: 600; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    CheckBox { text: "Show all disks"; checked <=> root.show_all_disks; }
+                    Button { text: "Refresh"; clicked => { root.refresh_devices(); } }
+                    CheckBox { text: "Verify"; checked <=> root.verify; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Destination"; }
+                    ComboBox { model: root.device_list; current-index <=> root.device_index; }
+                }
+                if (root.safety_required) : VerticalLayout {
+                    spacing: 6px;
+                    Text { text: root.safety_message; color: #b00020; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "Type ERASE to continue"; }
+                        LineEdit { text <=> root.confirm_text; }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #f5f5f5;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text { text: "Flash"; font-weight: 600; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "Flash"; enabled: !root.busy_flash; clicked => { root.flash(); } }
+                    Button { text: "Cancel"; clicked => { root.cancel(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    ProgressIndicator { progress: root.flash_progress; }
+                    Text { text: root.flash_status; }
+                }
+            }
+        }
+
+        Text {
+            text: "Uses USBImager engine (MIT license).";
+            font-size: 12px;
+            color: #555;
+        }
+    }
+
+    if (root.about_open) : Rectangle {
+        background: #00000088;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 640px;
+                height: 420px;
+                background: #ffffff;
+                border-radius: 8px;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 8px;
+                    Text { text: "About"; font-weight: 700; font-size: 18px; }
+                    Text { text: "USBImager 1.0.10"; }
+                    ScrollView {
+                        height: 300px;
+                        VerticalLayout {
+                            Text {
+                                text: root.about_text;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end;
+                        Button { text: "Close"; clicked => { root.about_open = false; } }
+                    }
+                }
+            }
+        }
+    }
+}
